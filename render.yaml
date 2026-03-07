@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: timeflow-api
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: timeflow-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: APP_ENV
+        value: production
+      - key: ALLOWED_ORIGINS
+        value: https://your-frontend.netlify.app  # aggiorna con URL reale
+
+databases:
+  - name: timeflow-db
+    plan: basic-256mb
+    databaseName: timeflow
+    user: timeflow_user
