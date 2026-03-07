@@ -2,12 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1.router import api_router
+import subprocess
 
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    docs_url="/docs" if settings.APP_ENV == "development" else None,
-    redoc_url="/redoc" if settings.APP_ENV == "development" else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 app.add_middleware(
@@ -20,6 +21,9 @@ app.add_middleware(
 
 app.include_router(api_router)
 
+@app.on_event("startup")
+def run_migrations():
+    subprocess.run(["alembic", "upgrade", "head"], check=True)
 
 @app.get("/health")
 def health():
