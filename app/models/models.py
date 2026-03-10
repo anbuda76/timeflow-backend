@@ -8,7 +8,7 @@ import enum
 from datetime import datetime, date, timezone
 from sqlalchemy import (
     String, Integer, Float, Boolean, Date, DateTime,
-    ForeignKey, Enum as SAEnum, Text, UniqueConstraint, Index
+    ForeignKey, Enum as SAEnum, Text, UniqueConstraint, func, Index
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.session import Base
@@ -40,22 +40,22 @@ class HolidayType(str, enum.Enum):
 class Organization(Base):
     __tablename__ = "organizations"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    plan: Mapped[str] = mapped_column(String(50), default="starter")
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    slug: Mapped[str] = mapped_column(String(100), unique=True)
+    plan: Mapped[str] = mapped_column(String(50), default="free")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Nuovi campi multi-tenant
+    logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    primary_color: Mapped[str | None] = mapped_column(String(7), nullable=True, default="#1d4ed8")
+    subscription_plan: Mapped[str] = mapped_column(String(50), default="free")
+    max_users: Mapped[int] = mapped_column(default=10)
 
     # Relationships
-    users: Mapped[list["User"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
-    projects: Mapped[list["Project"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
-    holidays: Mapped[list["Holiday"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
-
-    def __repr__(self):
-        return f"<Organization {self.name}>"
+    users: Mapped[list["User"]] = relationship(back_populates="organization")
+    projects: Mapped[list["Project"]] = relationship(back_populates="organization")
 
 
 # ── User ──────────────────────────────────────────────────────────────────────

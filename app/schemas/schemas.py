@@ -12,32 +12,45 @@ from app.models.models import UserRole, TimesheetStatus, HolidayType
 # ── Organization ──────────────────────────────────────────────────────────────
 
 class OrganizationBase(BaseModel):
-    name: str = Field(..., min_length=2, max_length=200)
-    plan: str = "starter"
-
+    name: str
+    slug: str
+    plan: str = "free"
 
 class OrganizationCreate(OrganizationBase):
-    slug: str = Field(..., min_length=2, max_length=100, pattern=r"^[a-z0-9-]+$")
-    admin_email: EmailStr
-    admin_password: str = Field(..., min_length=8)
-    admin_first_name: str
-    admin_last_name: str
-
+    pass
 
 class OrganizationUpdate(BaseModel):
-    name: Optional[str] = None
-    plan: Optional[str] = None
-    is_active: Optional[bool] = None
+    name: str | None = None
+    logo_url: str | None = None
+    primary_color: str | None = None
+    subscription_plan: str | None = None
+    max_users: int | None = None
+    is_active: bool | None = None
 
-
-class OrganizationRead(OrganizationBase):
+class OrganizationRead(BaseModel):
     id: int
+    name: str
     slug: str
+    plan: str
     is_active: bool
     created_at: datetime
+    logo_url: str | None = None
+    primary_color: str | None = None
+    subscription_plan: str = "free"
+    max_users: int = 10
 
     model_config = {"from_attributes": True}
 
+class RegisterRequest(BaseModel):
+    company_name: str
+    first_name: str
+    last_name: str
+    email: EmailStr
+    password: str = Field(min_length=8)
+
+class RegisterResponse(BaseModel):
+    organization: OrganizationRead
+    user: UserRead
 
 # ── User ──────────────────────────────────────────────────────────────────────
 
