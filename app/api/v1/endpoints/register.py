@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.models import Organization, User, UserRole
 from app.schemas.schemas import RegisterRequest, RegisterResponse
-from app.core.security import get_password_hash
+from app.core.security import hash_password
 import re
 
 router = APIRouter(prefix="/register", tags=["register"])
@@ -51,7 +51,7 @@ def register_organization(
     # Crea utente admin
     user = User(
         email=data.email,
-        hashed_password=get_password_hash(data.password),
+        hashed_password=hash_password(data.password),
         first_name=data.first_name,
         last_name=data.last_name,
         role=UserRole.ADMIN,

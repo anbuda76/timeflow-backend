@@ -41,16 +41,6 @@ class OrganizationRead(BaseModel):
 
     model_config = {"from_attributes": True}
 
-class RegisterRequest(BaseModel):
-    company_name: str
-    first_name: str
-    last_name: str
-    email: EmailStr
-    password: str = Field(min_length=8)
-
-class RegisterResponse(BaseModel):
-    organization: OrganizationRead
-    user: UserRead
 
 # ── User ──────────────────────────────────────────────────────────────────────
 
@@ -98,6 +88,18 @@ class UserReadBrief(BaseModel):
     role: UserRole
 
     model_config = {"from_attributes": True}
+
+
+class RegisterRequest(BaseModel):
+    company_name: str
+    first_name: str
+    last_name: str
+    email: EmailStr
+    password: str = Field(min_length=8)
+
+class RegisterResponse(BaseModel):
+    organization: OrganizationRead
+    user: UserRead
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────

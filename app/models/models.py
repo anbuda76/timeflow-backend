@@ -17,22 +17,22 @@ from app.db.session import Base
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
 class UserRole(str, enum.Enum):
-    SUPER_ADMIN = "super_admin"      # accesso globale (tu)
-    ADMIN = "admin"                  # gestisce la propria org
-    MANAGER = "manager"              # approva ore del team
-    EMPLOYEE = "employee"            # inserisce ore
+    SUPER_ADMIN = "super_admin"
+    ADMIN = "admin"
+    MANAGER = "manager"
+    EMPLOYEE = "employee"
 
 
 class TimesheetStatus(str, enum.Enum):
-    DRAFT = "draft"                  # bozza, in modifica
-    SUBMITTED = "submitted"          # inviato per approvazione
-    APPROVED = "approved"            # approvato dal manager
-    REJECTED = "rejected"            # rifiutato con note
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    APPROVED = "approved"
+    REJECTED = "rejected"
 
 
 class HolidayType(str, enum.Enum):
-    NATIONAL = "national"            # festività nazionale
-    COMPANY = "company"              # chiusura aziendale custom
+    NATIONAL = "national"
+    COMPANY = "company"
 
 
 # ── Organization (Tenant) ─────────────────────────────────────────────────────
@@ -45,9 +45,13 @@ class Organization(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True)
     plan: Mapped[str] = mapped_column(String(50), default="free")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc)
+    )
 
-    # Nuovi campi multi-tenant
+    # Campi multi-tenant
     logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     primary_color: Mapped[str | None] = mapped_column(String(7), nullable=True, default="#1d4ed8")
     subscription_plan: Mapped[str] = mapped_column(String(50), default="free")
@@ -56,6 +60,7 @@ class Organization(Base):
     # Relationships
     users: Mapped[list["User"]] = relationship(back_populates="organization")
     projects: Mapped[list["Project"]] = relationship(back_populates="organization")
+    holidays: Mapped[list["Holiday"]] = relationship(back_populates="organization")
 
 
 # ── User ──────────────────────────────────────────────────────────────────────
@@ -72,7 +77,7 @@ class User(Base):
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[UserRole] = mapped_column(SAEnum(UserRole), default=UserRole.EMPLOYEE)
-    hourly_rate: Mapped[float | None] = mapped_column(Float, nullable=True)   # costo orario €
+    hourly_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     manager_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -81,7 +86,6 @@ class User(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    # email unica per organizzazione (non globale: stesso utente può avere account in org diverse)
     __table_args__ = (
         UniqueConstraint("organization_id", "email", name="uq_user_org_email"),
         Index("ix_user_org", "organization_id"),
@@ -132,7 +136,6 @@ class Project(Base):
 # ── ProjectAssignment ─────────────────────────────────────────────────────────
 
 class ProjectAssignment(Base):
-    """Associa un utente a un progetto (molti-a-molti con metadati)."""
     __tablename__ = "project_assignments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -158,10 +161,6 @@ class ProjectAssignment(Base):
 # ── Timesheet ─────────────────────────────────────────────────────────────────
 
 class Timesheet(Base):
-    """
-    Un timesheet rappresenta un mese di lavoro di un utente.
-    Contiene N TimesheetEntry (una per giorno/progetto).
-    """
     __tablename__ = "timesheets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -169,7 +168,7 @@ class Timesheet(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     year: Mapped[int] = mapped_column(Integer, nullable=False)
-    month: Mapped[int] = mapped_column(Integer, nullable=False)   # 1–12
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[TimesheetStatus] = mapped_column(
         SAEnum(TimesheetStatus), default=TimesheetStatus.DRAFT
     )
@@ -182,7 +181,6 @@ class Timesheet(Base):
     rejection_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
-        # Un solo timesheet per utente per mese
         UniqueConstraint("user_id", "year", "month", name="uq_timesheet_user_month"),
         Index("ix_timesheet_user", "user_id"),
     )
@@ -203,10 +201,6 @@ class Timesheet(Base):
 # ── TimesheetEntry ────────────────────────────────────────────────────────────
 
 class TimesheetEntry(Base):
-    """
-    Singola riga del timesheet: utente X ha lavorato N ore
-    sul progetto Y nella data Z.
-    """
     __tablename__ = "timesheet_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -217,11 +211,10 @@ class TimesheetEntry(Base):
         Integer, ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
     )
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
-    hours: Mapped[float] = mapped_column(Float, nullable=False)  # es. 7.5
+    hours: Mapped[float] = mapped_column(Float, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
-        # Un solo record per timesheet/progetto/giorno
         UniqueConstraint("timesheet_id", "project_id", "entry_date", name="uq_entry"),
         Index("ix_entry_timesheet", "timesheet_id"),
         Index("ix_entry_date", "entry_date"),
@@ -238,7 +231,6 @@ class TimesheetEntry(Base):
 # ── Holiday ───────────────────────────────────────────────────────────────────
 
 class Holiday(Base):
-    """Festività nazionali e chiusure aziendali per organizzazione."""
     __tablename__ = "holidays"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
