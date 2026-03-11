@@ -69,7 +69,7 @@ def update_my_organization(
     allowed_fields = {"logo_url", "primary_color", "name"}
     if current_user.role == UserRole.SUPER_ADMIN:
         allowed_fields = None  # super admin può modificare tutto
-    data = payload.model_dump(exclude_none=True)
+    data = payload.model_dump(exclude_unset=True)
     for field, value in data.items():
         if allowed_fields is None or field in allowed_fields:
             setattr(org, field, value)
