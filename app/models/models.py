@@ -46,9 +46,8 @@ class Organization(Base):
     plan: Mapped[str] = mapped_column(String(50), default="free")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        default=lambda: datetime.now(timezone.utc)
+    
+	DateTime(timezone=True),server_default=func.now(), default=lambda: datetime.now(timezone.utc)
     )
 
     # Campi multi-tenant
@@ -118,6 +117,7 @@ class Project(Base):
     client_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     budget_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
