@@ -147,6 +147,7 @@ class ProjectRead(ProjectBase):
     id: int
     organization_id: int
     is_active: bool
+    is_system: bool = False
     created_at: datetime
     used_hours: Optional[float] = None
     assignments: list[AssignmentRead] = []
