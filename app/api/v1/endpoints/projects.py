@@ -23,10 +23,10 @@ def list_projects(
             .filter(ProjectAssignment.user_id == current_user.id).all()
         ]
         print(f"DEBUG: assigned_ids={assigned_ids}")
-        projects = db.query(Project).filter(
+	projects = db.query(Project).filter(
             Project.organization_id == current_user.organization_id,
         ).filter(
-            (Project.id.in_(assigned_ids)) | (Project.is_system == True)
+            (Project.id.in_(assigned_ids)) | (Project.is_system.is_(True))
         ).all()
         print(f"DEBUG: projects found={[p.name for p in projects]}")
     else:
