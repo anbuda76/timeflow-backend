@@ -16,17 +16,20 @@ def list_projects(
 ):
     if current_user.role == UserRole.SUPER_ADMIN:
         projects = db.query(Project).all()
+    elif current_user.role == UserRole.EMPLOYEE:
+        assigned_ids = [
+            a.project_id for a in db.query(ProjectAssignment)
+            .filter(ProjectAssignment.user_id == current_user.id).all()
+        ]
+        projects = db.query(Project).filter(
+            Project.organization_id == current_user.organization_id,
+        ).filter(
+            (Project.id.in_(assigned_ids)) | (Project.is_system == True)
+        ).all()
     else:
-        if current_user.role == UserRole.EMPLOYEE:
-            assigned_ids = [
-                a.project_id for a in db.query(ProjectAssignment)
-                .filter(ProjectAssignment.user_id == current_user.id).all()
-            ]
-            projects = db.query(Project).filter(Project.id.in_(assigned_ids)).all()
-        else:
-            projects = db.query(Project).filter(
-                Project.organization_id == current_user.organization_id
-            ).all()
+        projects = db.query(Project).filter(
+            Project.organization_id == current_user.organization_id
+        ).all()
 
     result = []
     for p in projects:
