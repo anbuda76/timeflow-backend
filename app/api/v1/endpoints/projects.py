@@ -14,6 +14,7 @@ def list_projects(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    print(f"DEBUG: user_id={current_user.id} role={current_user.role} org_id={current_user.organization_id}")
     if current_user.role == UserRole.SUPER_ADMIN:
         projects = db.query(Project).all()
     elif current_user.role == UserRole.EMPLOYEE:
@@ -21,11 +22,13 @@ def list_projects(
             a.project_id for a in db.query(ProjectAssignment)
             .filter(ProjectAssignment.user_id == current_user.id).all()
         ]
+        print(f"DEBUG: assigned_ids={assigned_ids}")
         projects = db.query(Project).filter(
             Project.organization_id == current_user.organization_id,
         ).filter(
             (Project.id.in_(assigned_ids)) | (Project.is_system == True)
         ).all()
+        print(f"DEBUG: projects found={[p.name for p in projects]}")
     else:
         projects = db.query(Project).filter(
             Project.organization_id == current_user.organization_id
