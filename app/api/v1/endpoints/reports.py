@@ -7,6 +7,7 @@ from app.models.models import (
     User, UserRole, Project
 )
 from app.core.deps import require_manager
+
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 @router.get("/costs")
@@ -33,7 +34,6 @@ def monthly_costs(
             Timesheet.status == TimesheetStatus.APPROVED,
         )
     )
-
     if month:
         q = q.filter(Timesheet.month == month)
     if project_id:
@@ -65,6 +65,7 @@ def monthly_costs(
         p_name = project.name if project else f"Progetto #{row.project_id}"
         c_name = project.client_name if project else None
         b_hours = project.budget_hours if project else None
+        b_amount = project.budget_amount if project else None
 
         if row.project_id not in by_project:
             by_project[row.project_id] = {
@@ -72,6 +73,7 @@ def monthly_costs(
                 "project_name": p_name,
                 "client_name": c_name,
                 "budget_hours": b_hours,
+                "budget_amount": b_amount,
                 "hours": 0.0,
                 "cost": 0.0,
             }
@@ -89,11 +91,38 @@ def monthly_costs(
         by_user[row.user_id]["hours"] += row.total_hours
         by_user[row.user_id]["cost"] += cost
 
+    # Calcola delta per progetto
+    projects_list = []
+    for p in by_project.values():
+        b_h = p["budget_hours"]
+        b_a = p["budget_amount"]
+        c_h = round(p["hours"], 2)
+        c_a = round(p["cost"], 2)
+
+        delta_hours = round(c_h - b_h, 2) if b_h else None
+        delta_hours_pct = round((c_h - b_h) / b_h * 100, 1) if b_h else None
+        delta_amount = round(c_a - b_a, 2) if b_a else None
+        delta_amount_pct = round((c_a - b_a) / b_a * 100, 1) if b_a else None
+
+        projects_list.append({
+            "project_id": p["project_id"],
+            "project_name": p["project_name"],
+            "client_name": p["client_name"],
+            "budget_hours": b_h,
+            "consuntivo_hours": c_h,
+            "delta_hours": delta_hours,
+            "delta_hours_pct": delta_hours_pct,
+            "budget_amount": b_a,
+            "consuntivo_amount": c_a,
+            "delta_amount": delta_amount,
+            "delta_amount_pct": delta_amount_pct,
+        })
+
     return {
         "year": year,
         "month": month,
         "total_hours": round(total_hours, 2),
         "total_cost": round(total_cost, 2),
-        "projects": list(by_project.values()),
+        "projects": projects_list,
         "users": list(by_user.values()),
     }
