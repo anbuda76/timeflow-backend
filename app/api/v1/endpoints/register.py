@@ -112,3 +112,19 @@ def init_system_projects_for_all(
                 created_count += 1
     db.commit()
     return {"message": f"Creati {created_count} progetti di sistema"}
+
+@router.delete("/cleanup-system-projects", status_code=status.HTTP_200_OK)
+def cleanup_fake_system_projects(
+    db: Session = Depends(get_db),
+):
+    """Elimina i progetti con nomi di sistema ma is_system=False."""
+    system_names = [p["name"] for p in SYSTEM_PROJECTS]
+    fake = db.query(Project).filter(
+        Project.name.in_(system_names),
+        Project.is_system == False,
+    ).all()
+    count = len(fake)
+    for p in fake:
+        db.delete(p)
+    db.commit()
+    return {"message": f"Eliminati {count} progetti duplicati"}
