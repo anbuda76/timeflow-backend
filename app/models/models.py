@@ -116,6 +116,9 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     client_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     budget_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    budget_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(

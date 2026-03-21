@@ -126,7 +126,9 @@ class ProjectBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     client_name: Optional[str] = None
     budget_hours: Optional[float] = Field(None, ge=0)
-
+    budget_amount: Optional[float] = Field(None, ge=0)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
 
 class ProjectCreate(ProjectBase):
     pass
@@ -136,8 +138,10 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     client_name: Optional[str] = None
     budget_hours: Optional[float] = Field(None, ge=0)
+    budget_amount: Optional[float] = Field(None, ge=0)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
     is_active: Optional[bool] = None
-
 
 class AssignmentRead(BaseModel):
     user_id: int
