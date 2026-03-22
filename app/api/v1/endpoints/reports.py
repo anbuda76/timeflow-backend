@@ -1,10 +1,209 @@
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from app.db.session import get_db
+from app.models.models import (
+    Timesheet, TimesheetEntry, TimesheetStatus,
+    User, UserRole, Project
+)
+from app.core.deps import require_manager
 import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import math
 import calendar
+
+router = APIRouter(prefix="/reports", tags=["reports"])
+
+@router.get("/costs")
+def monthly_costs(
+    year: int = Query(...),
+    month: int | None = Query(None),
+    project_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_manager),
+):
+    q = (
+        db.query(
+            TimesheetEntry.project_id,
+            User.id.label("user_id"),
+            User.first_name,
+            User.last_name,
+            User.hourly_rate,
+            func.sum(TimesheetEntry.hours).label("total_hours"),
+        )
+        .join(Timesheet, TimesheetEntry.timesheet_id == Timesheet.id)
+        .join(User, Timesheet.user_id == User.id)
+        .filter(
+            Timesheet.year == year,
+            Timesheet.status == TimesheetStatus.APPROVED,
+        )
+    )
+    if month:
+        q = q.filter(Timesheet.month == month)
+    if project_id:
+        q = q.filter(TimesheetEntry.project_id == project_id)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        q = q.filter(User.organization_id == current_user.organization_id)
+    if current_user.role == UserRole.MANAGER:
+        team_ids = [u.id for u in db.query(User).filter(User.manager_id == current_user.id).all()]
+        team_ids.append(current_user.id)
+        q = q.filter(User.id.in_(team_ids))
+
+    rows = q.group_by(
+        TimesheetEntry.project_id, User.id,
+        User.first_name, User.last_name, User.hourly_rate
+    ).all()
+
+    by_project = {}
+    by_user = {}
+    total_hours = 0.0
+    total_cost = 0.0
+
+    for row in rows:
+        rate = row.hourly_rate or 0.0
+        cost = row.total_hours * rate
+        total_hours += row.total_hours
+        total_cost += cost
+
+        project = db.get(Project, row.project_id)
+        p_name = project.name if project else f"Progetto #{row.project_id}"
+        c_name = project.client_name if project else None
+        b_hours = project.budget_hours if project else None
+        b_amount = project.budget_amount if project else None
+
+        if row.project_id not in by_project:
+            by_project[row.project_id] = {
+                "project_id": row.project_id,
+                "project_name": p_name,
+                "client_name": c_name,
+                "budget_hours": b_hours,
+                "budget_amount": b_amount,
+                "hours": 0.0,
+                "cost": 0.0,
+            }
+        by_project[row.project_id]["hours"] += row.total_hours
+        by_project[row.project_id]["cost"] += cost
+
+        if row.user_id not in by_user:
+            by_user[row.user_id] = {
+                "user_id": row.user_id,
+                "user_name": f"{row.first_name} {row.last_name}",
+                "hourly_rate": rate,
+                "hours": 0.0,
+                "cost": 0.0,
+            }
+        by_user[row.user_id]["hours"] += row.total_hours
+        by_user[row.user_id]["cost"] += cost
+
+    projects_list = []
+    for p in by_project.values():
+        b_h = p["budget_hours"]
+        b_a = p["budget_amount"]
+        c_h = round(p["hours"], 2)
+        c_a = round(p["cost"], 2)
+
+        delta_hours = round(c_h - b_h, 2) if b_h else None
+        delta_hours_pct = round((c_h - b_h) / b_h * 100, 1) if b_h else None
+        delta_amount = round(c_a - b_a, 2) if b_a else None
+        delta_amount_pct = round((c_a - b_a) / b_a * 100, 1) if b_a else None
+
+        projects_list.append({
+            "project_id": p["project_id"],
+            "project_name": p["project_name"],
+            "client_name": p["client_name"],
+            "budget_hours": b_h,
+            "consuntivo_hours": c_h,
+            "delta_hours": delta_hours,
+            "delta_hours_pct": delta_hours_pct,
+            "budget_amount": b_a,
+            "consuntivo_amount": c_a,
+            "delta_amount": delta_amount,
+            "delta_amount_pct": delta_amount_pct,
+        })
+
+    return {
+        "year": year,
+        "month": month,
+        "total_hours": round(total_hours, 2),
+        "total_cost": round(total_cost, 2),
+        "projects": projects_list,
+        "users": list(by_user.values()),
+    }
+
+
+@router.get("/monthly-trend")
+def monthly_trend(
+    year: int = Query(...),
+    project_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_manager),
+):
+    q = (
+        db.query(
+            Timesheet.month,
+            TimesheetEntry.project_id,
+            func.sum(TimesheetEntry.hours).label("total_hours"),
+            func.sum(TimesheetEntry.hours * User.hourly_rate).label("total_cost"),
+        )
+        .join(Timesheet, TimesheetEntry.timesheet_id == Timesheet.id)
+        .join(User, Timesheet.user_id == User.id)
+        .filter(
+            Timesheet.year == year,
+            Timesheet.status == TimesheetStatus.APPROVED,
+            User.hourly_rate.isnot(None),
+        )
+    )
+    if project_id:
+        q = q.filter(TimesheetEntry.project_id == project_id)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        q = q.filter(User.organization_id == current_user.organization_id)
+    if current_user.role == UserRole.MANAGER:
+        team_ids = [u.id for u in db.query(User).filter(User.manager_id == current_user.id).all()]
+        team_ids.append(current_user.id)
+        q = q.filter(User.id.in_(team_ids))
+
+    rows = q.group_by(Timesheet.month, TimesheetEntry.project_id).all()
+
+    projects_data = {}
+    for row in rows:
+        pid = row.project_id
+        if pid not in projects_data:
+            project = db.get(Project, pid)
+            projects_data[pid] = {
+                "project_id": pid,
+                "project_name": project.name if project else f"#{pid}",
+                "budget_amount": project.budget_amount if project else None,
+                "months": {m: {"hours": 0.0, "cost": 0.0} for m in range(1, 13)},
+            }
+        projects_data[pid]["months"][row.month]["hours"] += row.total_hours or 0
+        projects_data[pid]["months"][row.month]["cost"] += row.total_cost or 0
+
+    result = []
+    for pid, pdata in projects_data.items():
+        monthly = []
+        cumulative_cost = 0.0
+        budget = pdata["budget_amount"] or 0
+        for m in range(1, 13):
+            cumulative_cost += pdata["months"][m]["cost"]
+            monthly.append({
+                "month": m,
+                "hours": round(pdata["months"][m]["hours"], 2),
+                "cost": round(pdata["months"][m]["cost"], 2),
+                "cumulative_cost": round(cumulative_cost, 2),
+                "budget_target": round(budget / 12 * m, 2) if budget else None,
+            })
+        result.append({
+            "project_id": pid,
+            "project_name": pdata["project_name"],
+            "budget_amount": pdata["budget_amount"],
+            "monthly": monthly,
+        })
+
+    return result
+
 
 @router.get("/export-excel")
 def export_excel(
@@ -16,20 +215,13 @@ def export_excel(
     MONTH_NAMES = ['','Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno',
                    'Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre']
 
-    # Stili
     header_fill = PatternFill("solid", start_color="1d4ed8", end_color="1d4ed8")
     header_font = Font(bold=True, color="FFFFFF", size=10)
-    subheader_fill = PatternFill("solid", start_color="dbeafe", end_color="dbeafe")
     subheader_font = Font(bold=True, size=9)
     weekend_fill = PatternFill("solid", start_color="f1f5f9", end_color="f1f5f9")
     total_fill = PatternFill("solid", start_color="eff6ff", end_color="eff6ff")
     center = Alignment(horizontal="center", vertical="center")
-    thin = Border(
-        left=Side(style='thin'), right=Side(style='thin'),
-        top=Side(style='thin'), bottom=Side(style='thin')
-    )
 
-    # Recupera utenti dell'org
     users_q = db.query(User).filter(
         User.organization_id == current_user.organization_id,
         User.is_active == True,
@@ -41,21 +233,18 @@ def export_excel(
         users_q = users_q.filter(User.id.in_(team_ids))
     users = users_q.all()
 
-    # Recupera progetti normali dell'org
     projects = db.query(Project).filter(
         Project.organization_id == current_user.organization_id,
         Project.is_system == False,
         Project.is_active == True,
     ).all()
 
-    # Recupera system projects (FERIE, PERMESSI, MALATTIA, STRAORDINARI)
     system_projects = db.query(Project).filter(
         Project.organization_id == current_user.organization_id,
         Project.is_system == True,
     ).all()
     system_map = {p.name.upper(): p.id for p in system_projects}
 
-    # Recupera tutti i timesheet approvati del mese
     days_in_month = calendar.monthrange(year, month)[1]
 
     def get_entries_for_user(user_id):
@@ -78,8 +267,6 @@ def export_excel(
         return result
 
     wb = Workbook()
-
-    # ── FOGLIO 1: RIEPILOGO GIORNATE ─────────────────────────────────────────
     ws1 = wb.active
     ws1.title = "RIEPILOGO GIORNATE"
 
@@ -88,40 +275,30 @@ def export_excel(
         entries = get_entries_for_user(user.id)
         base_row = row_offset + 1
 
-        # Nome utente
         ws1.merge_cells(start_row=base_row, start_column=3, end_row=base_row, end_column=3+days_in_month)
         cell = ws1.cell(row=base_row, column=3, value=f"{user.first_name.upper()} {user.last_name.upper()}")
-        cell.font = Font(bold=True, size=11)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = center
 
-        # Anno e Mese
         ws1.cell(row=base_row, column=1, value="ANNO").font = subheader_font
         ws1.cell(row=base_row, column=2, value=year)
         ws1.cell(row=base_row+1, column=1, value="MESE").font = subheader_font
         ws1.cell(row=base_row+1, column=2, value=MONTH_NAMES[month])
-
-        # Header giorni
-        ws1.cell(row=base_row+2, column=2, value="")
         ws1.cell(row=base_row+2, column=3, value="GIORNI").font = subheader_font
 
         for d in range(1, days_in_month+1):
             col = d + 3
-            ws1.cell(row=base_row+2, column=col, value=d)
-            ws1.cell(row=base_row+2, column=col).alignment = center
+            ws1.cell(row=base_row+2, column=col, value=d).alignment = center
             ws1.cell(row=base_row+2, column=col).font = Font(bold=True, size=9)
-            # Giorno settimana
             dow = calendar.weekday(year, month, d)
             day_letter = ['L','M','M','G','V','S','D'][dow]
-            ws1.cell(row=base_row+3, column=col, value=day_letter)
-            ws1.cell(row=base_row+3, column=col).alignment = center
+            ws1.cell(row=base_row+3, column=col, value=day_letter).alignment = center
             ws1.cell(row=base_row+3, column=col).font = Font(size=8)
-            if dow >= 5:  # weekend
+            if dow >= 5:
                 for r in range(base_row+2, base_row+9):
                     ws1.cell(row=r, column=col).fill = weekend_fill
 
-        # Righe dati
         row_labels = [
             ("ORE", None),
             ("STRAORDINARI", system_map.get("STRAORDINARI")),
@@ -134,11 +311,9 @@ def export_excel(
             data_row = base_row + 4 + i
             ws1.cell(row=data_row, column=3, value=label).font = Font(bold=True, size=9)
 
-            row_total = 0
             for d in range(1, days_in_month+1):
                 col = d + 3
                 if label == "ORE":
-                    # Somma tutte le ore dei progetti normali per quel giorno
                     val = sum(
                         proj_entries.get(d, 0)
                         for p_id, proj_entries in entries.items()
@@ -148,21 +323,16 @@ def export_excel(
                     val = entries.get(proj_id, {}).get(d, 0)
                 else:
                     val = 0
-
                 if val:
-                    ws1.cell(row=data_row, column=col, value=val)
-                    ws1.cell(row=data_row, column=col).alignment = center
-                    row_total += val
+                    ws1.cell(row=data_row, column=col, value=val).alignment = center
 
-            # Totale riga
             tot_col = days_in_month + 4
             ws1.cell(row=data_row, column=tot_col, value=f'=SUM({get_column_letter(4)}{data_row}:{get_column_letter(tot_col-1)}{data_row})')
             ws1.cell(row=data_row, column=tot_col).fill = total_fill
             ws1.cell(row=data_row, column=tot_col).font = Font(bold=True, size=9)
 
-        row_offset += 10  # spazio tra utenti
+        row_offset += 10
 
-    # Larghezze colonne foglio 1
     ws1.column_dimensions['A'].width = 8
     ws1.column_dimensions['B'].width = 12
     ws1.column_dimensions['C'].width = 16
@@ -170,30 +340,26 @@ def export_excel(
         ws1.column_dimensions[get_column_letter(d+3)].width = 4
     ws1.column_dimensions[get_column_letter(35)].width = 8
 
-    # ── FOGLIO 2: RIEPILOGO PROGETTI ─────────────────────────────────────────
     ws2 = wb.create_sheet("RIEPILOGO PROGETTI")
-
-    # Header utenti
-    ws2.cell(row=1, column=2, value="n°").font = subheader_font
-    ws2.cell(row=1, column=3, value="PROGETTO").font = subheader_font
     ws2.cell(row=1, column=1, value=f"{MONTH_NAMES[month]} {year}").font = Font(bold=True, size=11)
+    ws2.cell(row=2, column=2, value="n°").font = subheader_font
+    ws2.cell(row=2, column=3, value="PROGETTO").font = subheader_font
 
     col = 4
     for user in users:
-        ws2.merge_cells(start_row=1, start_column=col, end_row=1, end_column=col+1)
-        cell = ws2.cell(row=1, column=col, value=user.last_name.upper())
+        ws2.merge_cells(start_row=2, start_column=col, end_row=2, end_column=col+1)
+        cell = ws2.cell(row=2, column=col, value=user.last_name.upper())
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = center
-        ws2.cell(row=2, column=col, value="ORE").font = subheader_font
-        ws2.cell(row=2, column=col).alignment = center
-        ws2.cell(row=2, column=col+1, value="GIORNI").font = subheader_font
-        ws2.cell(row=2, column=col+1).alignment = center
+        ws2.cell(row=3, column=col, value="ORE").font = subheader_font
+        ws2.cell(row=3, column=col).alignment = center
+        ws2.cell(row=3, column=col+1, value="GIORNI").font = subheader_font
+        ws2.cell(row=3, column=col+1).alignment = center
         col += 3
 
-    # Righe progetti
     for i, project in enumerate(projects):
-        data_row = i + 3
+        data_row = i + 4
         ws2.cell(row=data_row, column=2, value=i+1)
         ws2.cell(row=data_row, column=3, value=project.name).font = Font(size=9)
 
@@ -208,16 +374,14 @@ def export_excel(
                 ws2.cell(row=data_row, column=col+1, value=giorni).alignment = center
             col += 3
 
-    # Larghezze colonne foglio 2
     ws2.column_dimensions['A'].width = 12
     ws2.column_dimensions['B'].width = 5
     ws2.column_dimensions['C'].width = 30
-    for i, user in enumerate(users):
+    for i in range(len(users)):
         ws2.column_dimensions[get_column_letter(4 + i*3)].width = 8
         ws2.column_dimensions[get_column_letter(5 + i*3)].width = 8
         ws2.column_dimensions[get_column_letter(6 + i*3)].width = 3
 
-    # Salva in memoria
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
