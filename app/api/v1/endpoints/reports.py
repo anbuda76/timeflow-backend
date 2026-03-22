@@ -126,3 +126,76 @@ def monthly_costs(
         "projects": projects_list,
         "users": list(by_user.values()),
     }
+
+@router.get("/monthly-trend")
+def monthly_trend(
+    year: int = Query(...),
+    project_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_manager),
+):
+    """Restituisce i costi aggregati per mese per l'anno selezionato."""
+    q = (
+        db.query(
+            Timesheet.month,
+            TimesheetEntry.project_id,
+            func.sum(TimesheetEntry.hours).label("total_hours"),
+            func.sum(TimesheetEntry.hours * User.hourly_rate).label("total_cost"),
+        )
+        .join(Timesheet, TimesheetEntry.timesheet_id == Timesheet.id)
+        .join(User, Timesheet.user_id == User.id)
+        .filter(
+            Timesheet.year == year,
+            Timesheet.status == TimesheetStatus.APPROVED,
+            User.hourly_rate.isnot(None),
+        )
+    )
+    if project_id:
+        q = q.filter(TimesheetEntry.project_id == project_id)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        q = q.filter(User.organization_id == current_user.organization_id)
+    if current_user.role == UserRole.MANAGER:
+        team_ids = [u.id for u in db.query(User).filter(User.manager_id == current_user.id).all()]
+        team_ids.append(current_user.id)
+        q = q.filter(User.id.in_(team_ids))
+
+    rows = q.group_by(Timesheet.month, TimesheetEntry.project_id).all()
+
+    # Raggruppa per progetto
+    projects_data = {}
+    for row in rows:
+        pid = row.project_id
+        if pid not in projects_data:
+            project = db.get(Project, pid)
+            projects_data[pid] = {
+                "project_id": pid,
+                "project_name": project.name if project else f"#{pid}",
+                "budget_amount": project.budget_amount if project else None,
+                "months": {m: {"hours": 0.0, "cost": 0.0} for m in range(1, 13)},
+            }
+        projects_data[pid]["months"][row.month]["hours"] += row.total_hours or 0
+        projects_data[pid]["months"][row.month]["cost"] += row.total_cost or 0
+
+    # Costruisce trend cumulato per mese
+    result = []
+    for pid, pdata in projects_data.items():
+        monthly = []
+        cumulative_cost = 0.0
+        budget = pdata["budget_amount"] or 0
+        for m in range(1, 13):
+            cumulative_cost += pdata["months"][m]["cost"]
+            monthly.append({
+                "month": m,
+                "hours": round(pdata["months"][m]["hours"], 2),
+                "cost": round(pdata["months"][m]["cost"], 2),
+                "cumulative_cost": round(cumulative_cost, 2),
+                "budget_target": round(budget / 12 * m, 2) if budget else None,
+            })
+        result.append({
+            "project_id": pid,
+            "project_name": pdata["project_name"],
+            "budget_amount": pdata["budget_amount"],
+            "monthly": monthly,
+        })
+
+    return result
