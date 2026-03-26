@@ -2,7 +2,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.db.session import get_db
-from app.models.models import Timesheet, TimesheetEntry, TimesheetStatus, User, UserRole
+from app.models.models import (
+    Timesheet, TimesheetEntry, TimesheetStatus,
+    User, UserRole, Holiday, WeekendAuthorization
+)
 from app.core.deps import get_current_user, require_manager, same_org_or_admin
 from app.schemas.schemas import (
     TimesheetCreate, TimesheetUpdate, TimesheetRead, TimesheetReadBrief,
@@ -141,6 +144,41 @@ def upsert_entries(
         raise HTTPException(status_code=403, detail="Accesso negato")
     if ts.status not in (TimesheetStatus.DRAFT, TimesheetStatus.REJECTED):
         raise HTTPException(status_code=400, detail="Timesheet non modificabile")
+
+    non_zero_entries = [e for e in entries if e.hours > 0]
+    if non_zero_entries:
+        entry_dates = {e.entry_date for e in non_zero_entries}
+
+        # 1) Festività: bloccate SEMPRE
+        holiday_rows = db.query(Holiday).filter(
+            Holiday.organization_id == current_user.organization_id,
+            Holiday.holiday_date.in_(list(entry_dates)),
+        ).all()
+        holiday_dates = {h.holiday_date for h in holiday_rows}
+
+        # 2) Weekend: accettato solo se autorizzato (e solo se NON è festività)
+        weekend_dates = {d for d in entry_dates if d.weekday() in (5, 6)}  # 5=Sab, 6=Dom (Python)
+        auth_rows = []
+        auth_dates = set()
+        if weekend_dates:
+            auth_rows = db.query(WeekendAuthorization).filter(
+                WeekendAuthorization.organization_id == current_user.organization_id,
+                WeekendAuthorization.user_id == current_user.id,
+                WeekendAuthorization.auth_date.in_(list(weekend_dates)),
+            ).all()
+            auth_dates = {a.auth_date for a in auth_rows}
+
+        for e in non_zero_entries:
+            if e.entry_date in holiday_dates:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Festività bloccata per il {e.entry_date.isoformat()}",
+                )
+            if e.entry_date in weekend_dates and e.entry_date not in auth_dates:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Weekend non autorizzato per il {e.entry_date.isoformat()}",
+                )
 
     # Cancella le entries esistenti e reinserisci
     db.query(TimesheetEntry).filter(TimesheetEntry.timesheet_id == ts_id).delete()

@@ -254,3 +254,30 @@ class Holiday(Base):
 
     def __repr__(self):
         return f"<Holiday {self.holiday_date} — {self.label}>"
+
+# ── WeekendAuthorization ──────────────────────────────────────────────────────
+
+class WeekendAuthorization(Base):
+    """Autorizzazione per lavorare in un giorno di weekend."""
+    __tablename__ = "weekend_authorizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    authorized_by_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    auth_date: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "auth_date", name="uq_weekend_auth"),
+        Index("ix_weekend_auth_org", "organization_id"),
+    )
