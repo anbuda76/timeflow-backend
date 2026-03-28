@@ -102,3 +102,24 @@ def change_password(
         raise HTTPException(status_code=400, detail="Password attuale non corretta")
     current_user.hashed_password = hash_password(payload.new_password)
     db.commit()
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+    same_org_or_admin(user.organization_id, current_user)
+
+    if user.timesheets:
+        raise HTTPException(
+            status_code=400,
+            detail="Non è possibile eliminare utente perché ha un timesheet registrato"
+        )
+
+    db.delete(user)
+    db.commit()
