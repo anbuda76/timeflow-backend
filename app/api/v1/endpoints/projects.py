@@ -15,7 +15,7 @@ def list_projects(
     current_user: User = Depends(get_current_user),
 ):
     if current_user.role == UserRole.SUPER_ADMIN:
-        projects = db.query(Project).all()
+        projects = db.query(Project).order_by(Project.id.desc()).all()
     elif current_user.role == UserRole.EMPLOYEE:
         assigned_ids = [
             a.project_id for a in db.query(ProjectAssignment)
@@ -25,11 +25,11 @@ def list_projects(
             Project.organization_id == current_user.organization_id
         ).filter(
             (Project.id.in_(assigned_ids)) | (Project.is_system.is_(True))
-        ).all()
+        ).order_by(Project.id.desc()).all()
     else:
         projects = db.query(Project).filter(
             Project.organization_id == current_user.organization_id
-        ).all()
+        ).order_by(Project.id.desc()).all()
 
     result = []
     for p in projects:
@@ -137,4 +137,25 @@ def unassign_user(
         ProjectAssignment.project_id == project_id,
         ProjectAssignment.user_id == user_id,
     ).delete()
+    db.commit()
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Progetto non trovato")
+    same_org_or_admin(project.organization_id, current_user)
+
+    if project.entries:
+        raise HTTPException(
+            status_code=400,
+            detail="Non è possibile eliminare il progetto perché ha ore caricate"
+        )
+
+    db.delete(project)
     db.commit()
