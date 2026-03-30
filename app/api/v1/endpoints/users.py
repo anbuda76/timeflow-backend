@@ -4,7 +4,7 @@ from app.db.session import get_db
 from app.models.models import User, UserRole
 from app.core.security import hash_password, verify_password
 from app.core.deps import get_current_user, require_admin, same_org_or_admin
-from app.schemas.schemas import UserCreate, UserUpdate, UserRead, UserPasswordUpdate
+from app.schemas.schemas import UserCreate, UserUpdate, UserRead, UserPasswordUpdate, AdminPasswordReset
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -101,6 +101,22 @@ def change_password(
     if not verify_password(payload.current_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Password attuale non corretta")
     current_user.hashed_password = hash_password(payload.new_password)
+    db.commit()
+
+
+@router.patch("/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+def admin_reset_password(
+    user_id: int,
+    payload: AdminPasswordReset,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+    same_org_or_admin(user.organization_id, current_user)
+
+    user.hashed_password = hash_password(payload.new_password)
     db.commit()
 
 
