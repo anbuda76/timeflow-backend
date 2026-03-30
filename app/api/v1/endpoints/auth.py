@@ -12,6 +12,7 @@ from app.schemas.schemas import (
     LoginRequest, TokenResponse, RefreshRequest, UserRead,
     PasswordResetRequest, PasswordResetConfirm,
 )
+from app.core.config import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -70,6 +71,7 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
 def forgot_password(payload: PasswordResetRequest, db: Session = Depends(get_db)):
     """
     Generates a reset token and logs the reset link to the console.
+    In development mode, also returns the reset link in the response.
     Always returns 200 to avoid email enumeration.
     """
     user = db.query(User).filter(
@@ -77,6 +79,7 @@ def forgot_password(payload: PasswordResetRequest, db: Session = Depends(get_db)
         User.is_active == True,
     ).first()
 
+    reset_link = None
     if user:
         token = create_reset_token(user.email)
         reset_link = f"http://localhost:5173/reset-password?token={token}"
@@ -85,7 +88,13 @@ def forgot_password(payload: PasswordResetRequest, db: Session = Depends(get_db)
         print(f"[PASSWORD RESET] Link (valido 30 min): {reset_link}")
         print(f"{'='*60}\n")
 
-    return {"message": "Se l'email esiste, riceverai le istruzioni per il reset."}
+    response: dict = {"message": "Se l'email esiste, riceverai le istruzioni per il reset."}
+
+    # In development, return the link directly so it can be tested without SMTP
+    if settings.APP_ENV == "development" and reset_link:
+        response["dev_reset_link"] = reset_link
+
+    return response
 
 
 @router.post("/reset-password", status_code=status.HTTP_200_OK)
