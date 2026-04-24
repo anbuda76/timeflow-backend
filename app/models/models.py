@@ -81,9 +81,6 @@ class User(Base):
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[UserRole] = mapped_column(SAEnum(UserRole), default=UserRole.EMPLOYEE)
-    contract_type: Mapped[ContractType] = mapped_column(
-        SAEnum(ContractType), default=ContractType.FULL_TIME, server_default="full_time"
-    )
     hourly_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     manager_id: Mapped[int | None] = mapped_column(

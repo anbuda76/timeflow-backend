@@ -49,7 +49,7 @@ class UserBase(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
     role: UserRole = UserRole.EMPLOYEE
-    contract_type: ContractType = ContractType.FULL_TIME
+    contract_type: Optional[ContractType] = ContractType.FULL_TIME
     hourly_rate: Optional[float] = Field(None, ge=0)
     manager_id: Optional[int] = None
 
