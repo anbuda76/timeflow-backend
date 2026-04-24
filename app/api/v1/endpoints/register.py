@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.models import Organization, User, UserRole, Project
@@ -38,7 +39,7 @@ def register_organization(
     db: Session = Depends(get_db),
 ):
     # Controlla se email già esistente
-    existing_user = db.query(User).filter(User.email == data.email).first()
+    existing_user = db.query(User).filter(func.lower(User.email) == data.email.lower()).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -68,7 +69,7 @@ def register_organization(
 
     # Crea utente admin
     user = User(
-        email=data.email,
+        email=data.email.lower(),
         hashed_password=hash_password(data.password),
         first_name=data.first_name,
         last_name=data.last_name,

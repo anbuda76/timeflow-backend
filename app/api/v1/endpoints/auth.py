@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from jose import JWTError, ExpiredSignatureError
 from app.db.session import get_db
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(
-        User.email == payload.email.lower(),
+        func.lower(User.email) == payload.email.lower(),
         User.is_active == True,
     ).first()
 
@@ -75,7 +76,7 @@ def forgot_password(payload: PasswordResetRequest, db: Session = Depends(get_db)
     Always returns 200 to avoid email enumeration.
     """
     user = db.query(User).filter(
-        User.email == payload.email.lower(),
+        func.lower(User.email) == payload.email.lower(),
         User.is_active == True,
     ).first()
 
@@ -117,7 +118,7 @@ def reset_password(payload: PasswordResetConfirm, db: Session = Depends(get_db))
         )
 
     user = db.query(User).filter(
-        User.email == email,
+        func.lower(User.email) == email.lower(),
         User.is_active == True,
     ).first()
     if not user:
