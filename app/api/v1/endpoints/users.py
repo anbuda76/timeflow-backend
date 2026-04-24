@@ -51,6 +51,7 @@ def create_user(
         first_name=payload.first_name,
         last_name=payload.last_name,
         role=payload.role,
+        contract_type=payload.contract_type,
         hourly_rate=payload.hourly_rate,
         manager_id=payload.manager_id,
     )
