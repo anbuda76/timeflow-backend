@@ -6,7 +6,7 @@ Separati in: Base (campi comuni) / Create (input) / Update / Read (output con id
 from pydantic import BaseModel, EmailStr, Field, model_validator
 from datetime import datetime, date
 from typing import Optional
-from app.models.models import UserRole, TimesheetStatus, HolidayType
+from app.models.models import UserRole, ContractType, TimesheetStatus, HolidayType
 
 
 # ── Organization ──────────────────────────────────────────────────────────────
@@ -49,6 +49,7 @@ class UserBase(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
     role: UserRole = UserRole.EMPLOYEE
+    contract_type: ContractType = ContractType.FULL_TIME
     hourly_rate: Optional[float] = Field(None, ge=0)
     manager_id: Optional[int] = None
 
@@ -61,6 +62,7 @@ class UserUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     role: Optional[UserRole] = None
+    contract_type: Optional[ContractType] = None
     hourly_rate: Optional[float] = Field(None, ge=0)
     manager_id: Optional[int] = None
     is_active: Optional[bool] = None
