@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 from app.db.session import get_db
 from app.models.models import (
     Timesheet, TimesheetEntry, TimesheetStatus,
@@ -25,6 +25,9 @@ def monthly_costs(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager),
 ):
+    is_approved = Timesheet.status == TimesheetStatus.APPROVED
+    is_pending = Timesheet.status != TimesheetStatus.APPROVED
+
     q = (
         db.query(
             TimesheetEntry.project_id,
@@ -32,14 +35,16 @@ def monthly_costs(
             User.first_name,
             User.last_name,
             User.hourly_rate,
-            func.sum(TimesheetEntry.hours).label("total_hours"),
+            func.sum(
+                case((is_approved, TimesheetEntry.hours), else_=0.0)
+            ).label("approved_hours"),
+            func.sum(
+                case((is_pending, TimesheetEntry.hours), else_=0.0)
+            ).label("pending_hours"),
         )
         .join(Timesheet, TimesheetEntry.timesheet_id == Timesheet.id)
         .join(User, Timesheet.user_id == User.id)
-        .filter(
-            Timesheet.year == year,
-            Timesheet.status == TimesheetStatus.APPROVED,
-        )
+        .filter(Timesheet.year == year)
     )
     if month:
         q = q.filter(Timesheet.month == month)
@@ -59,14 +64,22 @@ def monthly_costs(
 
     by_project = {}
     by_user = {}
-    total_hours = 0.0
-    total_cost = 0.0
+    total_approved_hours = 0.0
+    total_approved_cost = 0.0
+    total_pending_hours = 0.0
+    total_pending_cost = 0.0
 
     for row in rows:
         rate = row.hourly_rate or 0.0
-        cost = row.total_hours * rate
-        total_hours += row.total_hours
-        total_cost += cost
+        appr_h = float(row.approved_hours or 0)
+        pend_h = float(row.pending_hours or 0)
+        appr_cost = appr_h * rate
+        pend_cost = pend_h * rate
+
+        total_approved_hours += appr_h
+        total_approved_cost += appr_cost
+        total_pending_hours += pend_h
+        total_pending_cost += pend_cost
 
         project = db.get(Project, row.project_id)
         p_name = project.name if project else f"Progetto #{row.project_id}"
@@ -81,29 +94,41 @@ def monthly_costs(
                 "client_name": c_name,
                 "budget_hours": b_hours,
                 "budget_amount": b_amount,
-                "hours": 0.0,
-                "cost": 0.0,
+                "approved_hours": 0.0,
+                "approved_cost": 0.0,
+                "pending_hours": 0.0,
+                "pending_cost": 0.0,
             }
-        by_project[row.project_id]["hours"] += row.total_hours
-        by_project[row.project_id]["cost"] += cost
+        by_project[row.project_id]["approved_hours"] += appr_h
+        by_project[row.project_id]["approved_cost"] += appr_cost
+        by_project[row.project_id]["pending_hours"] += pend_h
+        by_project[row.project_id]["pending_cost"] += pend_cost
 
         if row.user_id not in by_user:
             by_user[row.user_id] = {
                 "user_id": row.user_id,
                 "user_name": f"{row.first_name} {row.last_name}",
                 "hourly_rate": rate,
-                "hours": 0.0,
-                "cost": 0.0,
+                "approved_hours": 0.0,
+                "approved_cost": 0.0,
+                "pending_hours": 0.0,
+                "pending_cost": 0.0,
             }
-        by_user[row.user_id]["hours"] += row.total_hours
-        by_user[row.user_id]["cost"] += cost
+        by_user[row.user_id]["approved_hours"] += appr_h
+        by_user[row.user_id]["approved_cost"] += appr_cost
+        by_user[row.user_id]["pending_hours"] += pend_h
+        by_user[row.user_id]["pending_cost"] += pend_cost
 
     projects_list = []
     for p in by_project.values():
         b_h = p["budget_hours"]
         b_a = p["budget_amount"]
-        c_h = round(p["hours"], 2)
-        c_a = round(p["cost"], 2)
+        appr_h = round(p["approved_hours"], 2)
+        pend_h = round(p["pending_hours"], 2)
+        appr_a = round(p["approved_cost"], 2)
+        pend_a = round(p["pending_cost"], 2)
+        c_h = round(appr_h + pend_h, 2)
+        c_a = round(appr_a + pend_a, 2)
 
         delta_hours = round(c_h - b_h, 2) if b_h else None
         delta_hours_pct = round((c_h - b_h) / b_h * 100, 1) if b_h else None
@@ -115,22 +140,42 @@ def monthly_costs(
             "project_name": p["project_name"],
             "client_name": p["client_name"],
             "budget_hours": b_h,
+            "budget_amount": b_a,
+            "approved_hours": appr_h,
+            "approved_amount": appr_a,
+            "pending_hours": pend_h,
+            "pending_amount": pend_a,
             "consuntivo_hours": c_h,
+            "consuntivo_amount": c_a,
             "delta_hours": delta_hours,
             "delta_hours_pct": delta_hours_pct,
-            "budget_amount": b_a,
-            "consuntivo_amount": c_a,
             "delta_amount": delta_amount,
             "delta_amount_pct": delta_amount_pct,
+        })
+
+    users_list = []
+    for u in by_user.values():
+        users_list.append({
+            **u,
+            "approved_hours": round(u["approved_hours"], 2),
+            "approved_cost": round(u["approved_cost"], 2),
+            "pending_hours": round(u["pending_hours"], 2),
+            "pending_cost": round(u["pending_cost"], 2),
+            "hours": round(u["approved_hours"] + u["pending_hours"], 2),
+            "cost": round(u["approved_cost"] + u["pending_cost"], 2),
         })
 
     return {
         "year": year,
         "month": month,
-        "total_hours": round(total_hours, 2),
-        "total_cost": round(total_cost, 2),
+        "total_approved_hours": round(total_approved_hours, 2),
+        "total_approved_cost": round(total_approved_cost, 2),
+        "total_pending_hours": round(total_pending_hours, 2),
+        "total_pending_cost": round(total_pending_cost, 2),
+        "total_hours": round(total_approved_hours + total_pending_hours, 2),
+        "total_cost": round(total_approved_cost + total_pending_cost, 2),
         "projects": projects_list,
-        "users": list(by_user.values()),
+        "users": users_list,
     }
 
 
@@ -141,18 +186,30 @@ def monthly_trend(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_manager),
 ):
+    is_approved = Timesheet.status == TimesheetStatus.APPROVED
+    is_pending = Timesheet.status != TimesheetStatus.APPROVED
+
     q = (
         db.query(
             Timesheet.month,
             TimesheetEntry.project_id,
-            func.sum(TimesheetEntry.hours).label("total_hours"),
-            func.sum(TimesheetEntry.hours * User.hourly_rate).label("total_cost"),
+            func.sum(
+                case((is_approved, TimesheetEntry.hours), else_=0.0)
+            ).label("approved_hours"),
+            func.sum(
+                case((is_pending, TimesheetEntry.hours), else_=0.0)
+            ).label("pending_hours"),
+            func.sum(
+                case((is_approved, TimesheetEntry.hours * User.hourly_rate), else_=0.0)
+            ).label("approved_cost"),
+            func.sum(
+                case((is_pending, TimesheetEntry.hours * User.hourly_rate), else_=0.0)
+            ).label("pending_cost"),
         )
         .join(Timesheet, TimesheetEntry.timesheet_id == Timesheet.id)
         .join(User, Timesheet.user_id == User.id)
         .filter(
             Timesheet.year == year,
-            Timesheet.status == TimesheetStatus.APPROVED,
             User.hourly_rate.isnot(None),
         )
     )
@@ -176,23 +233,34 @@ def monthly_trend(
                 "project_id": pid,
                 "project_name": project.name if project else f"#{pid}",
                 "budget_amount": project.budget_amount if project else None,
-                "months": {m: {"hours": 0.0, "cost": 0.0} for m in range(1, 13)},
+                "months": {m: {"approved_hours": 0.0, "pending_hours": 0.0, "approved_cost": 0.0, "pending_cost": 0.0} for m in range(1, 13)},
             }
-        projects_data[pid]["months"][row.month]["hours"] += row.total_hours or 0
-        projects_data[pid]["months"][row.month]["cost"] += row.total_cost or 0
+        m = row.month
+        projects_data[pid]["months"][m]["approved_hours"] += float(row.approved_hours or 0)
+        projects_data[pid]["months"][m]["pending_hours"] += float(row.pending_hours or 0)
+        projects_data[pid]["months"][m]["approved_cost"] += float(row.approved_cost or 0)
+        projects_data[pid]["months"][m]["pending_cost"] += float(row.pending_cost or 0)
 
     result = []
     for pid, pdata in projects_data.items():
         monthly = []
-        cumulative_cost = 0.0
+        cumulative_approved = 0.0
+        cumulative_pending = 0.0
         budget = pdata["budget_amount"] or 0
         for m in range(1, 13):
-            cumulative_cost += pdata["months"][m]["cost"]
+            md = pdata["months"][m]
+            cumulative_approved += md["approved_cost"]
+            cumulative_pending += md["pending_cost"]
             monthly.append({
                 "month": m,
-                "hours": round(pdata["months"][m]["hours"], 2),
-                "cost": round(pdata["months"][m]["cost"], 2),
-                "cumulative_cost": round(cumulative_cost, 2),
+                "approved_hours": round(md["approved_hours"], 2),
+                "pending_hours": round(md["pending_hours"], 2),
+                "hours": round(md["approved_hours"] + md["pending_hours"], 2),
+                "approved_cost": round(md["approved_cost"], 2),
+                "pending_cost": round(md["pending_cost"], 2),
+                "cost": round(md["approved_cost"] + md["pending_cost"], 2),
+                "cumulative_cost": round(cumulative_approved + cumulative_pending, 2),
+                "cumulative_approved": round(cumulative_approved, 2),
                 "budget_target": round(budget / 12 * m, 2) if budget else None,
             })
         result.append({
