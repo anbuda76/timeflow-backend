@@ -18,7 +18,8 @@ router = APIRouter(prefix="/timesheets", tags=["timesheets"])
 
 def _get_timesheet_or_404(ts_id: int, db: Session) -> Timesheet:
     ts = db.query(Timesheet).options(
-        joinedload(Timesheet.entries)
+        joinedload(Timesheet.entries),
+        joinedload(Timesheet.user),
     ).filter(Timesheet.id == ts_id).first()
     if not ts:
         raise HTTPException(status_code=404, detail="Timesheet non trovato")
@@ -186,7 +187,10 @@ def upsert_entries(
         ContractType.PART_TIME_6H: 6.0,
         ContractType.PART_TIME:    4.0,
     }
-    daily_limit = CONTRACT_HOURS.get(ts.user.contract_type, 8.0)
+    # Normalizza a string per sicurezza (SQLAlchemy può restituire enum o str)
+    ct_val = str(ts.user.contract_type).split('.')[-1] if hasattr(ts.user.contract_type, 'name') else str(ts.user.contract_type)
+    ct_map = {'full_time': 8.0, 'part_time_6h': 6.0, 'part_time': 4.0}
+    daily_limit = ct_map.get(ct_val, 8.0)
 
     # Cancella le entries esistenti (incluse quelle straordinario precedenti)
     db.query(TimesheetEntry).filter(TimesheetEntry.timesheet_id == ts_id).delete()
