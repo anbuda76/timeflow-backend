@@ -130,10 +130,10 @@ def monthly_costs(
         c_h = round(appr_h + pend_h, 2)
         c_a = round(appr_a + pend_a, 2)
 
-        delta_hours = round(c_h - b_h, 2) if b_h else None
-        delta_hours_pct = round((c_h - b_h) / b_h * 100, 1) if b_h else None
-        delta_amount = round(c_a - b_a, 2) if b_a else None
-        delta_amount_pct = round((c_a - b_a) / b_a * 100, 1) if b_a else None
+        delta_hours = round(b_h - c_h, 2) if b_h else None
+        delta_hours_pct = round((b_h - c_h) / b_h * 100, 1) if b_h else None
+        delta_amount = round(b_a - c_a, 2) if b_a else None
+        delta_amount_pct = round((b_a - c_a) / b_a * 100, 1) if b_a else None
 
         projects_list.append({
             "project_id": p["project_id"],
