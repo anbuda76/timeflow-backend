@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.db.session import get_db
 from app.models.models import (
     Timesheet, TimesheetEntry, TimesheetStatus,
-    User, UserRole, Holiday, WeekendAuthorization
+    User, UserRole, Holiday, WeekendAuthorization, ContractType
 )
 from app.core.deps import get_current_user, require_manager, same_org_or_admin
 from app.schemas.schemas import (
@@ -180,19 +180,49 @@ def upsert_entries(
                     detail=f"Weekend non autorizzato per il {e.entry_date.isoformat()}",
                 )
 
-    # Cancella le entries esistenti e reinserisci
+    # Mappa contratto → ore giornaliere contrattuali
+    CONTRACT_HOURS = {
+        ContractType.FULL_TIME:    8.0,
+        ContractType.PART_TIME_6H: 6.0,
+        ContractType.PART_TIME:    4.0,
+    }
+    daily_limit = CONTRACT_HOURS.get(ts.user.contract_type, 8.0)
+
+    # Cancella le entries esistenti (incluse quelle straordinario precedenti)
     db.query(TimesheetEntry).filter(TimesheetEntry.timesheet_id == ts_id).delete()
 
-    for e in entries:
-        if e.hours > 0:  # ignora righe vuote
-            entry = TimesheetEntry(
+    # Inserisci le entries utente (solo quelle non-overtime)
+    user_entries = [e for e in entries if e.hours > 0]
+    for e in user_entries:
+        entry = TimesheetEntry(
+            timesheet_id=ts_id,
+            project_id=e.project_id,
+            entry_date=e.entry_date,
+            hours=e.hours,
+            notes=e.notes,
+            is_overtime=False,
+        )
+        db.add(entry)
+    db.flush()
+
+    # Calcola straordinario per giorno
+    from collections import defaultdict
+    daily_totals = defaultdict(float)
+    for e in user_entries:
+        daily_totals[e.entry_date] += e.hours
+
+    for day, total in daily_totals.items():
+        if total > daily_limit:
+            overtime_h = round(total - daily_limit, 2)
+            ot_entry = TimesheetEntry(
                 timesheet_id=ts_id,
-                project_id=e.project_id,
-                entry_date=e.entry_date,
-                hours=e.hours,
-                notes=e.notes,
+                project_id=None,
+                entry_date=day,
+                hours=overtime_h,
+                notes="Straordinario automatico",
+                is_overtime=True,
             )
-            db.add(entry)
+            db.add(ot_entry)
 
     db.commit()
     return _get_timesheet_or_404(ts_id, db)
@@ -239,6 +269,24 @@ def review_timesheet(
     ts.reviewed_at = datetime.now(timezone.utc)
     ts.reviewed_by_id = current_user.id
     ts.rejection_note = payload.rejection_note if not payload.approved else None
+    db.commit()
+    db.refresh(ts)
+    return ts
+
+@router.post("/{ts_id}/reopen", response_model=TimesheetRead)
+def reopen_timesheet(
+    ts_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_manager),
+):
+    """Riporta un timesheet approvato in stato DRAFT per permettere modifiche."""
+    ts = _get_timesheet_or_404(ts_id, db)
+    if ts.status != TimesheetStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Solo i timesheet approvati possono essere riaperti")
+    ts.status = TimesheetStatus.DRAFT
+    ts.reviewed_at = None
+    ts.reviewed_by_id = None
+    ts.rejection_note = None
     db.commit()
     db.refresh(ts)
     return ts

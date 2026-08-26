@@ -25,6 +25,7 @@ class UserRole(str, enum.Enum):
 
 class ContractType(str, enum.Enum):
     FULL_TIME = "full_time"
+    PART_TIME_6H = "part_time_6h"
     PART_TIME = "part_time"
 
 
@@ -217,12 +218,13 @@ class TimesheetEntry(Base):
     timesheet_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("timesheets.id", ondelete="CASCADE"), nullable=False
     )
-    project_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
+    project_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("projects.id", ondelete="RESTRICT"), nullable=True
     )
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     hours: Mapped[float] = mapped_column(Float, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_overtime: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
         UniqueConstraint("timesheet_id", "project_id", "entry_date", name="uq_entry"),

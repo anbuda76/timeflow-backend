@@ -178,7 +178,7 @@ class ProjectRead(ProjectBase):
 # ── Timesheet ─────────────────────────────────────────────────────────────────
 
 class TimesheetEntryBase(BaseModel):
-    project_id: int
+    project_id: Optional[int] = None
     entry_date: date
     hours: float = Field(..., ge=0, le=24)
     notes: Optional[str] = None
@@ -189,6 +189,7 @@ class TimesheetEntryCreate(TimesheetEntryBase):
 
 
 class TimesheetEntryRead(TimesheetEntryBase):
+    is_overtime: bool = False
     id: int
     timesheet_id: int
 
