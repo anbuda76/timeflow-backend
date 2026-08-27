@@ -515,16 +515,41 @@ def monthly_trend(
         projects_data[pid]["months"][m]["approved_cost"] += float(row.approved_cost or 0)
         projects_data[pid]["months"][m]["pending_cost"] += float(row.pending_cost or 0)
 
+    # ── Costi fornitori per progetto/mese ─────────────────────────────────────
+    vq = db.query(VendorCost).filter(func.extract("year", VendorCost.cost_date) == year)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        vq = vq.filter(VendorCost.organization_id == current_user.organization_id)
+    if project_id:
+        vq = vq.filter(VendorCost.project_id == project_id)
+
+    for vc in vq.all():
+        if vc.cost_date is None:
+            continue
+        pid = vc.project_id
+        if pid not in projects_data:
+            project = db.get(Project, pid)
+            projects_data[pid] = {
+                "project_id": pid,
+                "project_name": project.name if project else f"#{pid}",
+                "budget_amount": project.budget_amount if project else None,
+                "months": {m: {"approved_hours": 0.0, "pending_hours": 0.0, "approved_cost": 0.0, "pending_cost": 0.0} for m in range(1, 13)},
+            }
+        md = projects_data[pid]["months"][vc.cost_date.month]
+        md["vendor_cost"] = md.get("vendor_cost", 0.0) + vc.amount
+
     result = []
     for pid, pdata in projects_data.items():
         monthly = []
         cumulative_approved = 0.0
         cumulative_pending = 0.0
         budget = pdata["budget_amount"] or 0
+        cumulative_vendor = 0.0
         for m in range(1, 13):
             md = pdata["months"][m]
+            vend = md.get("vendor_cost", 0.0)
             cumulative_approved += md["approved_cost"]
             cumulative_pending += md["pending_cost"]
+            cumulative_vendor += vend
             monthly.append({
                 "month": m,
                 "approved_hours": round(md["approved_hours"], 2),
@@ -532,13 +557,14 @@ def monthly_trend(
                 "hours": round(md["approved_hours"] + md["pending_hours"], 2),
                 "approved_cost": round(md["approved_cost"], 2),
                 "pending_cost": round(md["pending_cost"], 2),
-                "cost": round(md["approved_cost"] + md["pending_cost"], 2),
-                "cumulative_cost": round(cumulative_approved + cumulative_pending, 2),
+                "vendor_cost": round(vend, 2),
+                "cost": round(md["approved_cost"] + md["pending_cost"] + vend, 2),
+                "cumulative_cost": round(cumulative_approved + cumulative_pending + cumulative_vendor, 2),
                 "cumulative_approved": round(cumulative_approved, 2),
                 # Il budget è il tetto complessivo della commessa, non una quota
                 # mensile: si espone come valore costante più la % consumata.
                 "budget_line": round(budget, 2) if budget else None,
-                "budget_pct": round((cumulative_approved + cumulative_pending) / budget * 100, 1) if budget else None,
+                "budget_pct": round((cumulative_approved + cumulative_pending + cumulative_vendor) / budget * 100, 1) if budget else None,
             })
         result.append({
             "project_id": pid,
