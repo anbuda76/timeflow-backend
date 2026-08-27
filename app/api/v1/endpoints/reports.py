@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
@@ -200,6 +200,112 @@ def monthly_costs(
         "total_cost": round(total_approved_cost + total_pending_cost, 2),
         "projects": projects_list,
         "users": users_list,
+    }
+
+
+@router.get("/projects/{project_id}/detail")
+def project_cost_detail(
+    project_id: int,
+    year: int | None = Query(None, description="Se omesso, aggrega tutti gli anni"),
+    month: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_manager),
+):
+    """Dettaglio costi di una commessa: risorse interne (ore x tariffa) + costi fornitori."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Progetto non trovato")
+    if current_user.role != UserRole.SUPER_ADMIN and project.organization_id != current_user.organization_id:
+        raise HTTPException(status_code=404, detail="Progetto non trovato")
+
+    is_approved = Timesheet.status == TimesheetStatus.APPROVED
+    is_pending = Timesheet.status != TimesheetStatus.APPROVED
+
+    q = (
+        db.query(
+            User.id.label("user_id"),
+            User.first_name,
+            User.last_name,
+            User.hourly_rate,
+            func.sum(case((is_approved, TimesheetEntry.hours), else_=0.0)).label("approved_hours"),
+            func.sum(case((is_pending, TimesheetEntry.hours), else_=0.0)).label("pending_hours"),
+        )
+        .join(Timesheet, TimesheetEntry.timesheet_id == Timesheet.id)
+        .join(User, Timesheet.user_id == User.id)
+        .filter(TimesheetEntry.project_id == project_id)
+    )
+    if year:
+        q = q.filter(Timesheet.year == year)
+    if month:
+        q = q.filter(Timesheet.month == month)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        q = q.filter(User.organization_id == current_user.organization_id)
+    if current_user.role == UserRole.MANAGER:
+        team_ids = [u.id for u in db.query(User).filter(User.manager_id == current_user.id).all()]
+        team_ids.append(current_user.id)
+        q = q.filter(User.id.in_(team_ids))
+
+    rows = q.group_by(
+        User.id, User.first_name, User.last_name, User.hourly_rate
+    ).all()
+
+    users_detail = []
+    internal_total = 0.0
+    for r in rows:
+        rate = r.hourly_rate or 0.0
+        appr_h = round(float(r.approved_hours or 0), 2)
+        pend_h = round(float(r.pending_hours or 0), 2)
+        appr_c = round(appr_h * rate, 2)
+        pend_c = round(pend_h * rate, 2)
+        total_c = round(appr_c + pend_c, 2)
+        internal_total += total_c
+        users_detail.append({
+            "user_id": r.user_id,
+            "user_name": f"{r.first_name} {r.last_name}",
+            "hourly_rate": rate,
+            "approved_hours": appr_h,
+            "pending_hours": pend_h,
+            "total_hours": round(appr_h + pend_h, 2),
+            "approved_cost": appr_c,
+            "pending_cost": pend_c,
+            "total_cost": total_c,
+        })
+
+    # ── Costi fornitori sulla commessa ────────────────────────────────────────
+    vc_q = db.query(VendorCost).filter(VendorCost.project_id == project_id)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        vc_q = vc_q.filter(VendorCost.organization_id == current_user.organization_id)
+    vendor_total = 0.0
+    for vc in vc_q.all():
+        if vc.cost_date is None:
+            vendor_total += vc.amount
+            continue
+        if year and vc.cost_date.year != year:
+            continue
+        if month and vc.cost_date.month != month:
+            continue
+        vendor_total += vc.amount
+    vendor_total = round(vendor_total, 2)
+
+    grand_total = round(internal_total + vendor_total, 2)
+
+    # Percentuale di incidenza sul totale commessa
+    for u in users_detail:
+        u["pct"] = round(u["total_cost"] / grand_total * 100, 1) if grand_total else 0.0
+    users_detail.sort(key=lambda x: x["total_cost"], reverse=True)
+
+    return {
+        "project_id": project_id,
+        "project_name": project.name,
+        "client_name": project.client_name,
+        "budget_amount": project.budget_amount,
+        "year": year,
+        "month": month,
+        "users": users_detail,
+        "internal_cost": round(internal_total, 2),
+        "vendor_cost": vendor_total,
+        "vendor_pct": round(vendor_total / grand_total * 100, 1) if grand_total else 0.0,
+        "total_cost": grand_total,
     }
 
 
