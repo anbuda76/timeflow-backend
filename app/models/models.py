@@ -290,3 +290,63 @@ class WeekendAuthorization(Base):
         UniqueConstraint("user_id", "auth_date", name="uq_weekend_auth"),
         Index("ix_weekend_auth_org", "organization_id"),
     )
+
+
+# ── Vendor (Albo Fornitori) ───────────────────────────────────────────────────
+
+class Vendor(Base):
+    __tablename__ = "vendors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    tax_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (Index("ix_vendor_org", "organization_id"),)
+
+    costs: Mapped[list["VendorCost"]] = relationship(back_populates="vendor", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Vendor {self.name}>"
+
+
+# ── VendorCost (Costi Esterni) ────────────────────────────────────────────────
+
+class VendorCost(Base):
+    __tablename__ = "vendor_costs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    vendor_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("vendors.id", ondelete="RESTRICT"), nullable=False
+    )
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
+    )
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    cost_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (Index("ix_vendor_cost_org", "organization_id"),)
+
+    vendor: Mapped["Vendor"] = relationship(back_populates="costs")
+    project: Mapped["Project"] = relationship()
+
+    def __repr__(self):
+        return f"<VendorCost vendor={self.vendor_id} project={self.project_id} €{self.amount}>"

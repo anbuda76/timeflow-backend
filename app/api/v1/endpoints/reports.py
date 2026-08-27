@@ -5,7 +5,7 @@ from sqlalchemy import func, case
 from app.db.session import get_db
 from app.models.models import (
     Timesheet, TimesheetEntry, TimesheetStatus,
-    User, UserRole, Project
+    User, UserRole, Project, VendorCost
 )
 from app.core.deps import require_manager
 import io
@@ -119,6 +119,26 @@ def monthly_costs(
         by_user[row.user_id]["pending_hours"] += pend_h
         by_user[row.user_id]["pending_cost"] += pend_cost
 
+    # ── Costi esterni (vendor costs) per progetto ─────────────────────────────
+    vc_q = db.query(VendorCost).filter(
+        VendorCost.organization_id == current_user.organization_id,
+    )
+    if month:
+        vc_q = vc_q.filter(
+            func.extract("month", VendorCost.cost_date) == month,
+            func.extract("year", VendorCost.cost_date) == year,
+        )
+    else:
+        vc_q = vc_q.filter(func.extract("year", VendorCost.cost_date) == year)
+    # Costi senza data rientrano sempre
+    vc_no_date = db.query(VendorCost).filter(
+        VendorCost.organization_id == current_user.organization_id,
+        VendorCost.cost_date == None,
+    )
+    vendor_cost_by_project: dict[int, float] = {}
+    for vc in list(vc_q.all()) + list(vc_no_date.all()):
+        vendor_cost_by_project[vc.project_id] = vendor_cost_by_project.get(vc.project_id, 0.0) + vc.amount
+
     projects_list = []
     for p in by_project.values():
         b_h = p["budget_hours"]
@@ -129,11 +149,13 @@ def monthly_costs(
         pend_a = round(p["pending_cost"], 2)
         c_h = round(appr_h + pend_h, 2)
         c_a = round(appr_a + pend_a, 2)
+        ext_a = round(vendor_cost_by_project.get(p["project_id"], 0.0), 2)
+        total_a = round(c_a + ext_a, 2)
 
         delta_hours = round(b_h - c_h, 2) if b_h else None
         delta_hours_pct = round((b_h - c_h) / b_h * 100, 1) if b_h else None
-        delta_amount = round(b_a - c_a, 2) if b_a else None
-        delta_amount_pct = round((b_a - c_a) / b_a * 100, 1) if b_a else None
+        delta_amount = round(b_a - total_a, 2) if b_a else None
+        delta_amount_pct = round((b_a - total_a) / b_a * 100, 1) if b_a else None
 
         projects_list.append({
             "project_id": p["project_id"],
@@ -147,6 +169,8 @@ def monthly_costs(
             "pending_amount": pend_a,
             "consuntivo_hours": c_h,
             "consuntivo_amount": c_a,
+            "vendor_cost": ext_a,
+            "total_amount": total_a,
             "delta_hours": delta_hours,
             "delta_hours_pct": delta_hours_pct,
             "delta_amount": delta_amount,
