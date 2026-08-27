@@ -272,20 +272,35 @@ def project_cost_detail(
         })
 
     # ── Costi fornitori sulla commessa ────────────────────────────────────────
+    from app.models.models import Vendor
+    vendor_names = {v.id: v.name for v in db.query(Vendor).filter(
+        Vendor.organization_id == project.organization_id
+    ).all()}
+
     vc_q = db.query(VendorCost).filter(VendorCost.project_id == project_id)
     if current_user.role != UserRole.SUPER_ADMIN:
         vc_q = vc_q.filter(VendorCost.organization_id == current_user.organization_id)
+
     vendor_total = 0.0
+    vendor_list = []
     for vc in vc_q.all():
-        if vc.cost_date is None:
-            vendor_total += vc.amount
-            continue
-        if year and vc.cost_date.year != year:
-            continue
-        if month and vc.cost_date.month != month:
-            continue
+        if vc.cost_date is not None:
+            if year and vc.cost_date.year != year:
+                continue
+            if month and vc.cost_date.month != month:
+                continue
         vendor_total += vc.amount
+        vendor_list.append({
+            "id": vc.id,
+            "vendor_id": vc.vendor_id,
+            "vendor_name": vendor_names.get(vc.vendor_id, "—"),
+            "amount": round(vc.amount, 2),
+            "cost_date": vc.cost_date,
+            "description": vc.description,
+            "category": vc.category,
+        })
     vendor_total = round(vendor_total, 2)
+    vendor_list.sort(key=lambda x: x["amount"], reverse=True)
 
     grand_total = round(internal_total + vendor_total, 2)
 
@@ -293,19 +308,148 @@ def project_cost_detail(
     for u in users_detail:
         u["pct"] = round(u["total_cost"] / grand_total * 100, 1) if grand_total else 0.0
     users_detail.sort(key=lambda x: x["total_cost"], reverse=True)
+    for v in vendor_list:
+        v["pct"] = round(v["amount"] / grand_total * 100, 1) if grand_total else 0.0
+
+    # ── Timeline: per mese se anno definito, altrimenti per anno ──────────────
+    budget = project.budget_amount or 0.0
+
+    tq = (
+        db.query(
+            Timesheet.year.label("y"),
+            Timesheet.month.label("m"),
+            func.sum(case((is_approved, TimesheetEntry.hours * User.hourly_rate), else_=0.0)).label("appr_cost"),
+            func.sum(case((is_pending, TimesheetEntry.hours * User.hourly_rate), else_=0.0)).label("pend_cost"),
+        )
+        .join(Timesheet, TimesheetEntry.timesheet_id == Timesheet.id)
+        .join(User, Timesheet.user_id == User.id)
+        .filter(TimesheetEntry.project_id == project_id)
+    )
+    # La timeline copre SEMPRE l'intera vita della commessa, a prescindere dai
+    # filtri anno/mese: solo così la cumulata è confrontabile col budget totale.
+    if current_user.role != UserRole.SUPER_ADMIN:
+        tq = tq.filter(User.organization_id == current_user.organization_id)
+    trows = tq.group_by(Timesheet.year, Timesheet.month).all()
+
+    # Tutti i costi fornitori della commessa, non filtrati per periodo
+    all_vc = db.query(VendorCost).filter(VendorCost.project_id == project_id)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        all_vc = all_vc.filter(VendorCost.organization_id == current_user.organization_id)
+    all_vc = all_vc.all()
+
+    MONTH_LABELS = ['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic']
+
+    # Periodi con attività: (anno, mese) da timesheet + (anno, mese) da costi datati
+    periods = {(r.y, r.m) for r in trows}
+    periods |= {(vc.cost_date.year, vc.cost_date.month) for vc in all_vc if vc.cost_date}
+
+    undated_vendor = round(sum(vc.amount for vc in all_vc if vc.cost_date is None), 2)
+
+    timeline = []
+    granularity = "none"
+
+    if periods:
+        ymin, ymax = min(p[0] for p in periods), max(p[0] for p in periods)
+        first = min(periods)
+        last = max(periods)
+        span_months = (last[0] - first[0]) * 12 + (last[1] - first[1]) + 1
+        granularity = "month" if span_months <= 24 else "year"
+
+        buckets: dict = {}
+        if granularity == "month":
+            keys = []
+            y, m = first
+            while (y, m) <= last:
+                keys.append((y, m))
+                m += 1
+                if m > 12:
+                    m = 1; y += 1
+            labels = {k: f"{MONTH_LABELS[k[1] - 1]} {str(k[0])[2:]}" for k in keys}
+            for r in trows:
+                b = buckets.setdefault((r.y, r.m), {"appr": 0.0, "pend": 0.0, "vend": 0.0})
+                b["appr"] += float(r.appr_cost or 0)
+                b["pend"] += float(r.pend_cost or 0)
+            for vc in all_vc:
+                if vc.cost_date is None:
+                    continue
+                k = (vc.cost_date.year, vc.cost_date.month)
+                buckets.setdefault(k, {"appr": 0.0, "pend": 0.0, "vend": 0.0})["vend"] += vc.amount
+        else:
+            keys = list(range(ymin, ymax + 1))
+            labels = {k: str(k) for k in keys}
+            for r in trows:
+                b = buckets.setdefault(r.y, {"appr": 0.0, "pend": 0.0, "vend": 0.0})
+                b["appr"] += float(r.appr_cost or 0)
+                b["pend"] += float(r.pend_cost or 0)
+            for vc in all_vc:
+                if vc.cost_date is None:
+                    continue
+                buckets.setdefault(vc.cost_date.year, {"appr": 0.0, "pend": 0.0, "vend": 0.0})["vend"] += vc.amount
+
+        cumulative = 0.0
+        for k in keys:
+            b = buckets.get(k, {"appr": 0.0, "pend": 0.0, "vend": 0.0})
+            period_cost = b["appr"] + b["pend"] + b["vend"]
+            cumulative += period_cost
+            timeline.append({
+                "label": labels[k],
+                "approved_cost": round(b["appr"], 2),
+                "pending_cost": round(b["pend"], 2),
+                "vendor_cost": round(b["vend"], 2),
+                "period_cost": round(period_cost, 2),
+                "cumulative_cost": round(cumulative, 2),
+                "budget_line": round(budget, 2) if budget else None,
+                "undated": False,
+            })
+
+        # Costi fornitori senza data: bucket finale, così la cumulata quadra
+        if undated_vendor > 0:
+            cumulative += undated_vendor
+            timeline.append({
+                "label": "n.d.",
+                "approved_cost": 0.0,
+                "pending_cost": 0.0,
+                "vendor_cost": undated_vendor,
+                "period_cost": undated_vendor,
+                "cumulative_cost": round(cumulative, 2),
+                "budget_line": round(budget, 2) if budget else None,
+                "undated": True,
+            })
+
+    # Costo totale sull'intera vita della commessa (per il confronto col budget)
+    lifetime_internal = sum(float(r.appr_cost or 0) + float(r.pend_cost or 0) for r in trows)
+    lifetime_vendor = sum(vc.amount for vc in all_vc)
+    lifetime_total = round(lifetime_internal + lifetime_vendor, 2)
+
+    delta = round(budget - lifetime_total, 2) if budget else None
+    delta_pct = round((budget - lifetime_total) / budget * 100, 1) if budget else None
 
     return {
         "project_id": project_id,
         "project_name": project.name,
         "client_name": project.client_name,
         "budget_amount": project.budget_amount,
+        "is_active": project.is_active,
+        "start_date": project.start_date,
+        "end_date": project.end_date,
+        "note": project.note,
         "year": year,
         "month": month,
         "users": users_detail,
+        "vendor_costs": vendor_list,
+        "timeline": timeline,
+        "timeline_granularity": granularity,
+        "undated_vendor_cost": undated_vendor,
         "internal_cost": round(internal_total, 2),
         "vendor_cost": vendor_total,
         "vendor_pct": round(vendor_total / grand_total * 100, 1) if grand_total else 0.0,
         "total_cost": grand_total,
+        "lifetime_cost": lifetime_total,
+        "lifetime_internal": round(lifetime_internal, 2),
+        "lifetime_vendor": round(lifetime_vendor, 2),
+        "is_filtered": bool(year or month),
+        "delta_amount": delta,
+        "delta_amount_pct": delta_pct,
     }
 
 
@@ -391,7 +535,10 @@ def monthly_trend(
                 "cost": round(md["approved_cost"] + md["pending_cost"], 2),
                 "cumulative_cost": round(cumulative_approved + cumulative_pending, 2),
                 "cumulative_approved": round(cumulative_approved, 2),
-                "budget_target": round(budget / 12 * m, 2) if budget else None,
+                # Il budget è il tetto complessivo della commessa, non una quota
+                # mensile: si espone come valore costante più la % consumata.
+                "budget_line": round(budget, 2) if budget else None,
+                "budget_pct": round((cumulative_approved + cumulative_pending) / budget * 100, 1) if budget else None,
             })
         result.append({
             "project_id": pid,
