@@ -453,6 +453,118 @@ def project_cost_detail(
     }
 
 
+@router.get("/users/{user_id}/detail")
+def user_cost_detail(
+    user_id: int,
+    year: int | None = Query(None, description="Se omesso, aggrega tutti gli anni"),
+    month: int | None = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_manager),
+):
+    """Dettaglio delle commesse su cui una risorsa ha consuntivato nel periodo."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+    if current_user.role != UserRole.SUPER_ADMIN and user.organization_id != current_user.organization_id:
+        raise HTTPException(status_code=404, detail="Utente non trovato")
+    if current_user.role == UserRole.MANAGER:
+        team_ids = [u.id for u in db.query(User).filter(User.manager_id == current_user.id).all()]
+        team_ids.append(current_user.id)
+        if user_id not in team_ids:
+            raise HTTPException(status_code=403, detail="Utente non nel tuo team")
+
+    is_approved = Timesheet.status == TimesheetStatus.APPROVED
+    is_pending = Timesheet.status != TimesheetStatus.APPROVED
+
+    q = (
+        db.query(
+            TimesheetEntry.project_id,
+            TimesheetEntry.is_overtime,
+            func.sum(case((is_approved, TimesheetEntry.hours), else_=0.0)).label("approved_hours"),
+            func.sum(case((is_pending, TimesheetEntry.hours), else_=0.0)).label("pending_hours"),
+        )
+        .join(Timesheet, TimesheetEntry.timesheet_id == Timesheet.id)
+        .filter(Timesheet.user_id == user_id)
+    )
+    if year:
+        q = q.filter(Timesheet.year == year)
+    if month:
+        q = q.filter(Timesheet.month == month)
+    rows = q.group_by(TimesheetEntry.project_id, TimesheetEntry.is_overtime).all()
+
+    rate = user.hourly_rate or 0.0
+    projects_detail = []
+    system_detail = []
+    overtime_hours = 0.0
+    overtime_cost = 0.0
+    total_cost = 0.0
+    total_hours = 0.0
+
+    for r in rows:
+        appr_h = round(float(r.approved_hours or 0), 2)
+        pend_h = round(float(r.pending_hours or 0), 2)
+        tot_h = round(appr_h + pend_h, 2)
+        if tot_h == 0:
+            continue
+        cost = round(tot_h * rate, 2)
+        total_hours += tot_h
+        total_cost += cost
+
+        # Le entry di straordinario non hanno progetto
+        if r.is_overtime or r.project_id is None:
+            overtime_hours += tot_h
+            overtime_cost += cost
+            continue
+
+        project = db.get(Project, r.project_id)
+        item = {
+            "project_id": r.project_id,
+            "project_name": project.name if project else f"Progetto #{r.project_id}",
+            "client_name": project.client_name if project else None,
+            "is_system": bool(project.is_system) if project else False,
+            "approved_hours": appr_h,
+            "pending_hours": pend_h,
+            "total_hours": tot_h,
+            "approved_cost": round(appr_h * rate, 2),
+            "pending_cost": round(pend_h * rate, 2),
+            "total_cost": cost,
+        }
+        (system_detail if item["is_system"] else projects_detail).append(item)
+
+    total_cost = round(total_cost, 2)
+    total_hours = round(total_hours, 2)
+
+    for item in projects_detail + system_detail:
+        item["pct"] = round(item["total_cost"] / total_cost * 100, 1) if total_cost else 0.0
+    projects_detail.sort(key=lambda x: x["total_cost"], reverse=True)
+    system_detail.sort(key=lambda x: x["total_cost"], reverse=True)
+
+    billable_cost = round(sum(p["total_cost"] for p in projects_detail), 2)
+    billable_hours = round(sum(p["total_hours"] for p in projects_detail), 2)
+    system_cost = round(sum(p["total_cost"] for p in system_detail), 2)
+    system_hours = round(sum(p["total_hours"] for p in system_detail), 2)
+
+    return {
+        "user_id": user_id,
+        "user_name": f"{user.first_name} {user.last_name}",
+        "hourly_rate": rate,
+        "year": year,
+        "month": month,
+        "projects": projects_detail,
+        "system_projects": system_detail,
+        "overtime_hours": round(overtime_hours, 2),
+        "overtime_cost": round(overtime_cost, 2),
+        "overtime_pct": round(overtime_cost / total_cost * 100, 1) if total_cost else 0.0,
+        "billable_cost": billable_cost,
+        "billable_hours": billable_hours,
+        "billable_pct": round(billable_cost / total_cost * 100, 1) if total_cost else 0.0,
+        "system_cost": system_cost,
+        "system_hours": system_hours,
+        "total_cost": total_cost,
+        "total_hours": total_hours,
+    }
+
+
 @router.get("/monthly-trend")
 def monthly_trend(
     year: int = Query(...),
