@@ -135,9 +135,15 @@ def monthly_costs(
         VendorCost.organization_id == current_user.organization_id,
         VendorCost.cost_date == None,
     )
+    # Datati nel periodo e senza data vanno tenuti distinti: i secondi non
+    # appartengono a un anno, quindi chi aggrega più annualità li deve
+    # sommare una volta sola (come il budget).
     vendor_cost_by_project: dict[int, float] = {}
-    for vc in list(vc_q.all()) + list(vc_no_date.all()):
+    vendor_undated_by_project: dict[int, float] = {}
+    for vc in vc_q.all():
         vendor_cost_by_project[vc.project_id] = vendor_cost_by_project.get(vc.project_id, 0.0) + vc.amount
+    for vc in vc_no_date.all():
+        vendor_undated_by_project[vc.project_id] = vendor_undated_by_project.get(vc.project_id, 0.0) + vc.amount
 
     projects_list = []
     for p in by_project.values():
@@ -149,7 +155,9 @@ def monthly_costs(
         pend_a = round(p["pending_cost"], 2)
         c_h = round(appr_h + pend_h, 2)
         c_a = round(appr_a + pend_a, 2)
-        ext_a = round(vendor_cost_by_project.get(p["project_id"], 0.0), 2)
+        ext_dated = round(vendor_cost_by_project.get(p["project_id"], 0.0), 2)
+        ext_undated = round(vendor_undated_by_project.get(p["project_id"], 0.0), 2)
+        ext_a = round(ext_dated + ext_undated, 2)
         total_a = round(c_a + ext_a, 2)
 
         delta_hours = round(b_h - c_h, 2) if b_h else None
@@ -170,6 +178,7 @@ def monthly_costs(
             "consuntivo_hours": c_h,
             "consuntivo_amount": c_a,
             "vendor_cost": ext_a,
+            "vendor_cost_undated": ext_undated,
             "total_amount": total_a,
             "delta_hours": delta_hours,
             "delta_hours_pct": delta_hours_pct,
